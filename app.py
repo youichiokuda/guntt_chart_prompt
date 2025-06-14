@@ -3,35 +3,47 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.font_manager as fm
-import datetime
-import openai
-import json
-import re
 import os
-import urllib.request
-from pathlib import Path
+import re
+import json
+from datetime import datetime
+from openai import OpenAI
 
-# ✅ 日本語フォント設定（Streamlit Cloud対応）
-font_url = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf"
-font_dir = Path("/tmp/fonts")
-font_path = font_dir / "NotoSansCJKjp-Regular.otf"
+st.set_page_config(page_title="ガントチャート生成アプリ", layout="wide")
+st.title("🗓️ ガントチャート生成アプリ")
 
-if not font_path.exists():
-    font_dir.mkdir(parents=True, exist_ok=True)
-    urllib.request.urlretrieve(font_url, font_path)
+# ✅ システム内にある日本語フォント候補を探索
+font_candidates = [
+    "/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf",
+    "/usr/share/fonts/truetype/takao-gothic/TakaoPGothic.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+]
+for font_path in font_candidates:
+    if os.path.exists(font_path):
+        font_prop = fm.FontProperties(fname=font_path)
+        plt.rcParams["font.family"] = font_prop.get_name()
+        break
+else:
+    plt.rcParams["font.family"] = "sans-serif"
 
-fm.fontManager.addfont(str(font_path))
-plt.rcParams["font.family"] = fm.FontProperties(fname=str(font_path)).get_name()
-
-# ✅ JSON判定関数
 def is_json_like(text):
     return bool(re.match(r'^[\s]*[\[{]', text.strip()))
 
-# ✅ ガントチャート描画関数
+def parse_schedule(text):
+    try:
+        data = json.loads(text)
+        df = pd.DataFrame(data)
+        df['start'] = pd.to_datetime(df['start'])
+        df['end'] = pd.to_datetime(df['end'])
+        return df
+    except Exception as e:
+        st.error("JSONパースエラー: {}".format(e))
+        return pd.DataFrame()
+
 def plot_gantt(df, title):
     df = df.sort_values("start", ascending=False)
     fig, ax = plt.subplots(figsize=(12, 6))
-    for _, row in df.iterrows():
+    for i, row in df.iterrows():
         ax.barh(row['task'], (row['end'] - row['start']).days, left=row['start'], height=0.5)
 
     ax.xaxis.set_major_locator(mdates.MonthLocator())
@@ -40,16 +52,19 @@ def plot_gantt(df, title):
     ax.xaxis.set_label_position('top')
     plt.xticks(rotation=45)
     ax.grid(True, axis='both', linestyle='--', alpha=0.5)
+
     plt.title(title, y=1.1)
     plt.tight_layout()
     st.pyplot(fig)
 
-# ✅ Streamlit UI
-st.title("🗓️ ガントチャート生成アプリ")
+st.sidebar.header("🔑 OpenAI APIキーと設定")
+api_key = st.sidebar.text_input("OpenAI APIキー", type="password")
+model = st.sidebar.selectbox("モデル", ["gpt-4o", "gpt-4", "gpt-3.5-turbo"])
+st.sidebar.markdown("---")
+st.sidebar.markdown("[📚 使い方の説明](https://github.com/openai/openai-python)")
 
-api_key = st.text_input("🔑 OpenAI APIキーを入力", type="password")
-user_input = st.text_area("📋 スケジュール内容を入力してください", height=300)
-model = st.selectbox("🤖 使用するモデル", ["gpt-4o", "gpt-4", "gpt-4o-mini", "gpt-3.5-turbo"])
+st.subheader("📝 スケジュール文章を入力")
+user_input = st.text_area("スケジュール内容を日本語で入力してください", height=200)
 
 if st.button("ガントチャートを生成"):
     if not api_key:
@@ -58,7 +73,8 @@ if st.button("ガントチャートを生成"):
         st.warning("⚠️ スケジュール内容を入力してください。")
     else:
         try:
-            openai.api_key = api_key
+            client = OpenAI(api_key=api_key)
+
             with st.spinner("⏳ ChatGPTがスケジュールを解析中..."):
                 prompt = f"""
 以下の文章から日付とタスクを抽出し、JSON形式で出力してください。
@@ -75,7 +91,8 @@ if st.button("ガントチャートを生成"):
 文章:
 {user_input}
 """
-                response = openai.ChatCompletion.create(
+                
+                response = client.chat.completions.create(
                     model=model,
                     messages=[
                         {"role": "system", "content": "あなたはプロジェクトマネージャーです。"},
@@ -84,24 +101,20 @@ if st.button("ガントチャートを生成"):
                     temperature=0.2
                 )
 
-            result = response.choices[0].message.content.strip()
+                result = response.choices[0].message.content.strip()
+
+            st.subheader("📋 ChatGPTの解析結果")
+            st.code(result, language='json')
 
             if is_json_like(result):
-                try:
-                    json_data = json.loads(result)
-                    df = pd.DataFrame(json_data)
-                    df["start"] = pd.to_datetime(df["start"])
-                    df["end"] = pd.to_datetime(df["end"])
-                    st.success("✅ ガントチャートを表示します")
-                    plot_gantt(df, "スケジュール")
-                    with st.expander("📄 JSON表示"):
-                        st.json(json_data)
-                    with st.expander("📊 表形式"):
-                        st.dataframe(df)
-                except Exception as e:
-                    st.error(f"JSON解析エラー: {e}")
+                df = parse_schedule(result)
+                if not df.empty:
+                    st.subheader("📊 ガントチャート")
+                    plot_gantt(df, "プロジェクトスケジュール")
+                else:
+                    st.warning("解析されたデータが空です。入力内容を確認してください。")
             else:
-                st.error("❌ ChatGPTから有効なJSONが返されませんでした。出力:\n\n" + result)
+                st.warning("ChatGPTからの出力がJSON形式ではありませんでした。")
 
         except Exception as e:
             st.error(f"エラーが発生しました: {e}")
