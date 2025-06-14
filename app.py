@@ -9,7 +9,7 @@ import matplotlib.font_manager as fm
 import os
 import re
 
-# フォント設定（日本語対応）
+# 日本語フォント設定（DockerやLinux用）
 font_candidates = [
     "/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf",
     "/usr/share/fonts/truetype/takao-gothic/TakaoPGothic.ttf",
@@ -51,7 +51,7 @@ def extract_tasks_from_text(text, api_key, style_instruction=""):
 {style_instruction}
 """
     response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4o-mini",  # ✅ アクセス可能なモデル名
         messages=[
             {"role": "system", "content": "あなたはプロジェクトマネージャーのアシスタントです。"},
             {"role": "user", "content": prompt}
