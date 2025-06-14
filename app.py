@@ -51,7 +51,7 @@ def extract_tasks_from_text(text, api_key, style_instruction=""):
 {style_instruction}
 """
     response = client.chat.completions.create(
-        model="gpt-4o",
+        model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": "あなたはプロジェクトマネージャーのアシスタントです。"},
             {"role": "user", "content": prompt}
