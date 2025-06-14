@@ -5,45 +5,38 @@ import matplotlib.dates as mdates
 import matplotlib.font_manager as fm
 import os
 import re
-import json
 from datetime import datetime
 from openai import OpenAI
+import json
 
-st.set_page_config(page_title="ガントチャート生成アプリ", layout="wide")
-st.title("🗓️ ガントチャート生成アプリ")
-
-# ✅ システム内にある日本語フォント候補を探索
+# ✅ フォント設定（日本語対応）
 font_candidates = [
     "/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf",
     "/usr/share/fonts/truetype/takao-gothic/TakaoPGothic.ttf",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
 ]
+
 for font_path in font_candidates:
     if os.path.exists(font_path):
-        font_prop = fm.FontProperties(fname=font_path)
-        plt.rcParams["font.family"] = font_prop.get_name()
+        fm.fontManager.addfont(font_path)
+        plt.rcParams["font.family"] = fm.FontProperties(fname=font_path).get_name()
         break
 else:
     plt.rcParams["font.family"] = "sans-serif"
 
+# ✅ OpenAI 初期化
+client = OpenAI()
+
+# ✅ JSONらしい形式かを確認
 def is_json_like(text):
     return bool(re.match(r'^[\s]*[\[{]', text.strip()))
 
-def parse_schedule(text):
-    try:
-        data = json.loads(text)
-        df = pd.DataFrame(data)
-        df['start'] = pd.to_datetime(df['start'])
-        df['end'] = pd.to_datetime(df['end'])
-        return df
-    except Exception as e:
-        st.error("JSONパースエラー: {}".format(e))
-        return pd.DataFrame()
-
+# ✅ ガントチャート描画関数
 def plot_gantt(df, title):
     df = df.sort_values("start", ascending=False)
     fig, ax = plt.subplots(figsize=(12, 6))
-    for i, row in df.iterrows():
+
+    for _, row in df.iterrows():
         ax.barh(row['task'], (row['end'] - row['start']).days, left=row['start'], height=0.5)
 
     ax.xaxis.set_major_locator(mdates.MonthLocator())
@@ -57,64 +50,56 @@ def plot_gantt(df, title):
     plt.tight_layout()
     st.pyplot(fig)
 
-st.sidebar.header("🔑 OpenAI APIキーと設定")
-api_key = st.sidebar.text_input("OpenAI APIキー", type="password")
-model = st.sidebar.selectbox("モデル", ["gpt-4o", "gpt-4", "gpt-3.5-turbo"])
-st.sidebar.markdown("---")
-st.sidebar.markdown("[📚 使い方の説明](https://github.com/openai/openai-python)")
+# ✅ JSON→DataFrame変換
+def json_to_df(json_str):
+    try:
+        data = json.loads(json_str)
+        df = pd.DataFrame(data)
+        df["start"] = pd.to_datetime(df["start"])
+        df["end"] = pd.to_datetime(df["end"])
+        return df
+    except Exception as e:
+        st.error(f"JSONパースエラー: {e}")
+        return pd.DataFrame()
 
-st.subheader("📝 スケジュール文章を入力")
-user_input = st.text_area("スケジュール内容を日本語で入力してください", height=200)
+# ✅ OpenAI にプロンプト送信してJSON出力を得る
+def get_gantt_from_prompt(prompt):
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[
+            {
+                "role": "system",
+                "content": "あなたはプロジェクトマネージャーです。与えられた説明からJSON形式のガントチャートデータを生成してください。形式: [{\"task\": ..., \"start\": ..., \"end\": ...}, ...]"
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        temperature=0.3,
+        response_format="json"
+    )
+    return response.choices[0].message.content
 
-if st.button("ガントチャートを生成"):
-    if not api_key:
-        st.warning("⚠️ OpenAI APIキーを入力してください。")
-    elif not user_input.strip():
-        st.warning("⚠️ スケジュール内容を入力してください。")
+# ✅ Streamlit アプリ本体
+st.title("🗓️ プロンプトからガントチャート生成")
+
+input_text = st.text_area("プロンプトを入力（例: システム開発のプロジェクト計画）", height=200)
+
+if st.button("ガントチャート生成"):
+    if not input_text.strip():
+        st.warning("プロンプトを入力してください。")
     else:
-        try:
-            client = OpenAI(api_key=api_key)
-
-            with st.spinner("⏳ ChatGPTがスケジュールを解析中..."):
-                prompt = f"""
-以下の文章から日付とタスクを抽出し、JSON形式で出力してください。
-各タスクは、"task"（内容）, "start"（開始日）, "end"（終了日）を含みます。
-フォーマット:
-[
-  {{
-    "task": "タスク名",
-    "start": "2025-06-01",
-    "end": "2025-06-10"
-  }},
-  ...
-]
-文章:
-{user_input}
-"""
-                
-                response = client.chat.completions.create(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": "あなたはプロジェクトマネージャーです。"},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.2
-                )
-
-                result = response.choices[0].message.content.strip()
-
-            st.subheader("📋 ChatGPTの解析結果")
-            st.code(result, language='json')
-
-            if is_json_like(result):
-                df = parse_schedule(result)
+        with st.spinner("生成中..."):
+            output_json = get_gantt_from_prompt(input_text)
+            if is_json_like(output_json):
+                df = json_to_df(output_json)
                 if not df.empty:
-                    st.subheader("📊 ガントチャート")
-                    plot_gantt(df, "プロジェクトスケジュール")
+                    st.success("ガントチャートを生成しました。")
+                    st.dataframe(df)
+                    plot_gantt(df, "ガントチャート")
                 else:
-                    st.warning("解析されたデータが空です。入力内容を確認してください。")
+                    st.error("解析されたデータが空です。プロンプトの内容を確認してください。")
             else:
-                st.warning("ChatGPTからの出力がJSON形式ではありませんでした。")
-
-        except Exception as e:
-            st.error(f"エラーが発生しました: {e}")
+                st.error("OpenAIから有効なJSONが返されませんでした。")
+                st.code(output_json)
