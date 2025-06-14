@@ -1,5 +1,5 @@
 import streamlit as st
-import openai
+from openai import OpenAI
 import pandas as pd
 import json
 from datetime import datetime
@@ -27,7 +27,7 @@ def is_json_like(text):
     return bool(re.match(r'^[\s]*[\[{]', text.strip()))
 
 def extract_tasks_from_text(text, api_key, style_instruction=""):
-    openai.api_key = api_key
+    client = OpenAI(api_key=api_key)
     prompt = f"""
 以下のテキストからプロジェクトのタスクとその期間（開始日・終了日）を抽出し、以下のJSON形式で返してください。
 可能であれば、タスクごとに "color" や "height" を指定してください。
@@ -50,14 +50,14 @@ def extract_tasks_from_text(text, api_key, style_instruction=""):
 スタイルに関する指示:
 {style_instruction}
 """
-    response = openai.ChatCompletion.create(
-        model="gpt-4o-mini",
+    response = client.chat.completions.create(
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": "あなたはプロジェクトマネージャーのアシスタントです。"},
             {"role": "user", "content": prompt}
         ]
     )
-    return response.choices[0].message["content"].strip()
+    return response.choices[0].message.content.strip()
 
 def json_to_df(json_text):
     if not json_text.strip() or not is_json_like(json_text):
