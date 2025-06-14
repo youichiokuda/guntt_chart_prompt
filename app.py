@@ -1,11 +1,12 @@
-import streamlit as st
-import pandas as pd
+import os
+import re
+import json
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
-import os
-import openai
-import re
+import pandas as pd
+import streamlit as st
 from datetime import datetime
+from openai import OpenAI
 
 # ✅ システム内にある日本語フォント候補を探索
 font_candidates = [
@@ -21,34 +22,20 @@ for font_path in font_candidates:
 else:
     plt.rcParams["font.family"] = "sans-serif"
 
+# ✅ JSONっぽい形式かを判定
 def is_json_like(text):
     return bool(re.match(r'^[\s]*[\[{]', text.strip()))
 
-def draw_gantt_chart(df):
-    fig, ax = plt.subplots(figsize=(10, 4))
-    for idx, row in df.iterrows():
-        try:
-            ax.barh(
-                y=row["task"],
-                left=row["start"],
-                width=(row["end"] - row["start"]).days,
-                height=row.get("height", 0.4),
-                color=row.get("color", "skyblue"),
-                edgecolor="black"
-            )
-        except ValueError as e:
-            st.error(f"色指定 '{row.get('color')}' に問題があります: {e}")
-            return
-    ax.set_xlabel("日付")
-    ax.set_ylabel("タスク")
-    ax.set_title("ガントチャート")
-    plt.tight_layout()
-    st.pyplot(fig)
+# ✅ ChatGPT出力からJSONだけを抽出する
+def extract_json_string(text):
+    match = re.search(r'(\[.*?\]|\{.*?\})', text, re.DOTALL)
+    return match.group(1) if match else None
 
+# ✅ JSONからDataFrameへ変換
 def json_to_df(json_text):
     try:
-        data = eval(json_text) if isinstance(json_text, str) else json_text
-        df = pd.DataFrame(data)
+        tasks = json.loads(json_text)
+        df = pd.DataFrame(tasks)
         df["start"] = pd.to_datetime(df["start"])
         df["end"] = pd.to_datetime(df["end"])
         return df
@@ -56,59 +43,72 @@ def json_to_df(json_text):
         st.error(f"JSONパースエラー: {e}")
         return pd.DataFrame()
 
+# ✅ ガントチャート描画
+def draw_gantt_chart(df):
+    fig, ax = plt.subplots(figsize=(10, 2 + 0.5 * len(df)))
+    for i, row in df.iterrows():
+        ax.barh(
+            y=row["task"],
+            width=(row["end"] - row["start"]).days,
+            left=row["start"],
+            height=0.4,
+            color=row.get("color", "skyblue"),
+            edgecolor="black"
+        )
+    ax.set_xlabel("日付")
+    ax.set_ylabel("タスク")
+    ax.grid(True)
+    st.pyplot(fig)
+
+# ✅ ChatGPTからタスク抽出
 def extract_tasks_from_text(text, api_key, style_instruction=""):
-    client = openai.OpenAI(api_key=api_key)
+    client = OpenAI(api_key=api_key)
     prompt = f"""
-以下の文章からタスクの一覧を抽出し、ガントチャート形式で視覚化できるように、各タスクをJSONで出力してください。
-JSONの形式は以下のようにしてください：
+以下の日本語テキストからプロジェクトタスクを抽出し、JSON形式で出力してください。
+説明文や補足は不要です。以下の形式でお願いします：
+
 [
   {{
     "task": "タスク名",
     "start": "YYYY-MM-DD",
     "end": "YYYY-MM-DD",
-    "color": "任意の色（blueやgreenなど）",
-    "height": 0.4
+    "color": "blue"（任意）
   }},
   ...
 ]
 
-文章:
-{text}
-
-スタイルに関する指示:
 {style_instruction}
-"""
+
+{text}
+    """.strip()
+
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "あなたはプロジェクトマネージャーです。"},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0.3
+        model="gpt-4o-mini",  # 修正済み
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
     )
-    return response.choices[0].message.content.strip()
+    raw = response.choices[0].message.content
+    json_text = extract_json_string(raw)
+    return json_text
 
-st.title("🗓️ ガントチャート生成ツール（自然文 → 可視化）")
+# ✅ Streamlit UI
+st.set_page_config(page_title="ガントチャート生成ツール", layout="wide")
+st.title("🗂 ChatGPTによるガントチャート自動生成")
 
-api_key = st.text_input("🔑 OpenAI APIキーを入力してください", type="password")
-text = st.text_area("📄 ガントチャートにしたいスケジュール文章を入力してください")
-
-style_prompt = st.text_area("🎨 表示スタイルや色の希望（任意）", "例：サーバー関係は青、イベントは緑、高さは0.4")
+text = st.text_area("📋 プロジェクトタスク概要を日本語で入力してください", height=250)
+api_key = st.text_input("🔑 OpenAI APIキー", type="password")
+style_prompt = st.text_area("🎨 スタイル指示（任意）", value="色はタスクごとに分けてください。")
 
 if st.button("🚀 ChatGPTで解析してガントチャート生成"):
-    if not api_key:
-        st.warning("APIキーを入力してください。")
-    else:
-        with st.spinner("ChatGPTで解析中..."):
-            try:
-                json_text = extract_tasks_from_text(text, api_key, style_prompt)
-                df = json_to_df(json_text)
-                if not df.empty:
-                    st.success("✅ ガントチャートを生成しました！")
-                    draw_gantt_chart(df)
-                    with st.expander("📋 JSON出力を表示"):
-                        st.code(json_text, language="json")
-                else:
-                    st.warning("解析されたデータが空です。入力内容を確認してください。")
-            except Exception as e:
-                st.error(f"エラーが発生しました: {e}")
+    with st.spinner("ChatGPTで解析中..."):
+        if is_json_like(text):
+            json_text = text
+        else:
+            json_text = extract_tasks_from_text(text, api_key, style_prompt)
+
+        df = json_to_df(json_text)
+        if not df.empty:
+            st.success("✅ ガントチャートを生成しました")
+            draw_gantt_chart(df)
+        else:
+            st.error("❌ データがありませんでした")
