@@ -15,11 +15,11 @@
 
 ## 📦 セットアップ手順
 
-### 1. このリポジトリをクローンまたはZIPでダウンロード
+### 1. リポジトリをクローン
 
 ```bash
-unzip gantt-chart-app.zip
-cd gantt-chart-app
+git clone <REPO_URL>
+cd guntt_chart_prompt
 ```
 
 ### 2. Dockerイメージをビルド
@@ -74,7 +74,7 @@ http://localhost:8501
 ## 📄 ファイル構成
 
 ```
-gantt-chart-app/
+guntt_chart_prompt/
 ├── app.py             # Streamlitアプリ本体
 ├── Dockerfile         # Dockerビルド用
 ├── requirements.txt   # Python依存ライブラリ
